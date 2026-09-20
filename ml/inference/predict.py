@@ -139,6 +139,9 @@ class MultimodalPredictor:
 
         probability = self._fuse(meta_row)
         predicted_class = int(probability >= 0.5)
+        attention, modality_contribution = self._attention(meta_row)
+
+        from datetime import datetime, timezone
 
         return {
             "probability": probability,
@@ -149,8 +152,12 @@ class MultimodalPredictor:
                 m: instance_contributions(self._primary[m], row)
                 for m, row in provided.items()
             },
-            "modality_contribution": self._modality_contribution(meta_row),
+            "inputs": {m: row.iloc[0].to_dict() for m, row in provided.items()},
+            "meta_attention": attention,
+            "meta_values": dict(zip(META_FEATURE_NAMES, meta_row[0].tolist())),
+            "modality_contribution": modality_contribution,
             "fusion_model": "tabnet" if self._tabnet is not None else "weighted_soft_voting",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     # ------------------------------------------------------------- explainers
@@ -178,15 +185,20 @@ class MultimodalPredictor:
         return top
 
     def _modality_contribution(self, meta_row: np.ndarray) -> dict[str, float]:
+        """Backwards-compatible accessor (see :meth:`_attention`)."""
+        return self._attention(meta_row)[1]
+
+    def _attention(self, meta_row: np.ndarray) -> tuple[dict[str, float] | None, dict[str, float]]:
+        """TabNet attention (or ``None``) + normalised modality contributions."""
         if self._tabnet is not None:
             attention = attention_with_names(
                 self._tabnet, meta_row, META_FEATURE_NAMES)
-            return modality_contributions(attention, META_FEATURE_NAMES)
+            return attention, modality_contributions(attention, META_FEATURE_NAMES)
         # fallback: fitted voting weights over the available modalities
         weights = {m: float(w) for m, w in zip(MODALITIES, self._voter.weights)}
         available = {m: weights[m] for m in MODALITIES if meta_row[0, len(MODALITIES) + MODALITIES.index(m)] == 0.0}
         total = sum(available.values()) or 1.0
-        return {m: float(available.get(m, 0.0) / total) for m in MODALITIES}
+        return None, {m: float(available.get(m, 0.0) / total) for m in MODALITIES}
 
 
 __all__ = ["MultimodalPredictor", "META_FEATURE_NAMES"]

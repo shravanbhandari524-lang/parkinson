@@ -81,7 +81,16 @@ const multimodalRequestSchema = z
 /**
  * Validate an already-parsed ML-service response body against the API
  * contract. Returns the normalized response or throws AppError(502).
+ *
+ * The core fields are required; explanation/fusion/modalities blocks are
+ * optional pass-throughs that the React dashboard renders when present.
  */
+const explanationItemShape = z.object({
+  feature: z.string(),
+  shap: z.number(),
+  value: z.number().nullable().optional(),
+});
+
 function normalizeMlResponse(body) {
   const shape = z.object({
     risk_band: z.enum(['low', 'borderline', 'high']),
@@ -90,6 +99,29 @@ function normalizeMlResponse(body) {
     voice: modalityResultShape.optional(),
     handwriting: modalityResultShape.optional(),
     gait: modalityResultShape.optional(),
+    // pass-through blocks consumed by the frontend (all optional)
+    overall_probability: z.number().optional(),
+    timestamp: z.string().optional(),
+    modalities: z
+      .record(
+        z.string(),
+        z.object({
+          available: z.boolean().optional(),
+          probability: z.number().nullable().optional(),
+          contribution: z.number().nullable().optional(),
+        }),
+      )
+      .optional(),
+    fusion: z
+      .object({
+        method: z.string().optional(),
+        probability: z.number().optional(),
+        contribution: z.number().nullable().optional(),
+      })
+      .optional(),
+    explanations: z
+      .record(z.string(), z.array(explanationItemShape))
+      .optional(),
   });
 
   const parsed = shape.safeParse(body);
@@ -108,6 +140,8 @@ const modalityResultShape = z.object({
       contribution: z.number(),
     }),
   ),
+  available: z.boolean().optional(),
+  contribution: z.number().nullable().optional(),
 });
 
 module.exports = {
