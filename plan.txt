@@ -8,7 +8,7 @@ Status: PLAN ONLY - nothing has been built yet. Review before implementation.
 1. DATASET STUDY (what we actually have)
 ================================================================================
 
-1.1 VOICE  (Parkinson/Voice/parkinsons.data - UCI Parkinson's dataset)
+1.1 VOICE  (Parkinson/Voic/parkinsons.data - UCI Parkinson's dataset)
     - 195 samples, 24 columns.
     - 22 numeric acoustic features: MDVP:Fo/Fhi/Flo, Jitter (5 variants),
       Shimmer (6 variants), NHR, HNR, RPDE, DFA, spread1, spread2, D2, PPE.
