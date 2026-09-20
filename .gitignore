@@ -1,2 +1,25 @@
 Parkinson
 Parkinson.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ML environment & outputs
+ml/.venv/
+ml/config.local.yaml
+ml/artifacts/*
+!ml/artifacts/.gitkeep
+ml/metrics/*.json
+ml/metrics/*.csv
+ml/data/processed/
+
+# Environment
+.env
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
