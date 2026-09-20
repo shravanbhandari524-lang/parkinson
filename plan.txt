@@ -1,0 +1,213 @@
+================================================================================
+ PARKINSON'S DISEASE DETECTION - PROJECT PLAN
+ Multimodal: Voice + Handwriting + Gait
+================================================================================
+Status: PLAN ONLY - nothing has been built yet. Review before implementation.
+
+================================================================================
+1. DATASET STUDY (what we actually have)
+================================================================================
+
+1.1 VOICE  (Parkinson/Voice/parkinsons.data - UCI Parkinson's dataset)
+    - 195 samples, 24 columns.
+    - 22 numeric acoustic features: MDVP:Fo/Fhi/Flo, Jitter (5 variants),
+      Shimmer (6 variants), NHR, HNR, RPDE, DFA, spread1, spread2, D2, PPE.
+    - Label: `status` (1 = PD, 0 = healthy).
+    - Issues: small dataset, only 1 "healthy" recording subject group vs many
+      PD recordings, correlated features -> risk of optimistic accuracy.
+    - Split rule: nothing to group by -> StratifiedKFold (5-fold).
+
+1.2 HANDWRITING  (Parkinson/Handwriting/archive (7)/)
+    - Spiral_HandPD.csv and Meander_HandPD.csv (HandPD dataset).
+    - ~368 rows each: IMAGE_NAME (raw .jpg exams), ID_PATIENT, CLASS_TYPE
+      (1 = healthy, 2 = PD), GENDER, AGE, handedness, plus 10 signal features
+      (RMS, MAX/MIN/STD between-stroke metrics, MRT, MAX/MIN/STD_HT,
+      CHANGES_FROM_NEG_TO_POS).
+    - The exam images exist on Kaggle but only the CSV features are here ->
+      PLAN A: tabular features only. (PLAN B later: CNN on spiral images.)
+    - Critical: multiple rows per patient -> MUST split by ID_PATIENT
+      (GroupKFold / leave-patients-out) or accuracy will be fake.
+    - Spiral + Meander are complementary -> train per-exam then average, or
+      concatenate features.
+
+1.3 GAIT (force plates)  (Parkinson/Gait/gait-in-parkinsons-disease-1.0.0/)
+    - PhysioNet "Gait in Parkinson's Disease": 93 PD + 73 control subjects.
+    - Each record: tab-separated time series at 100 Hz, 19 columns
+      (time, 8 VGRF sensors left foot, 8 right foot, total L, total R).
+    - demographics.txt: age, gender, height, weight, HoehnYahr, UPDRS, speed.
+    - No fixed features -> we engineer them (see 4.3).
+    - Critical: many records per subject -> split by SUBJECT, never by record.
+
+1.4 GAIT (video, already in repo)  (Parkinson/Gait/gait_dashboard/)
+    - An existing pipeline: MILD YouTube keypoints (AlphaPose 136x3 JSON) ->
+      pose features -> RandomForest + calibration + SHAP + FastAPI +
+      Streamlit. Keep this as a separate module; do not merge the codebases,
+      just reuse its patterns.
+
+1.5 LABEL HARMONIZATION
+    - Voice: 1 = PD. HandPD: 1 = healthy, 2 = PD. PhysioNet: filename prefix
+      (Ga/Si/Ju + Pt = PD, Co = control).
+    - Normalize everything to y = 1 (PD) / 0 (healthy) in one shared loader.
+
+================================================================================
+2. MODEL CHOICES (per modality)
+================================================================================
+
+2.1 VOICE - tabular, 195 rows
+    Primary:   XGBoost (or GradientBoosting) with early stopping.
+    Baseline:  LogisticRegression (scaled) and RandomForest for comparison.
+    Why: tiny tabular data; tree ensembles handle feature correlation and
+    need no deep learning.
+
+2.2 HANDWRITING - tabular, ~368 rows, 10 features
+    Primary:   RandomForest + calibration (isotonic) - robust on small data.
+    Baseline:  SVM (RBF) and LogisticRegression.
+    Later/CNN option: if the raw spiral/meander images are downloaded, a small
+    CNN (or ResNet18 fine-tune) on the .jpg exams.
+
+2.3 GAIT (VGRF time series)
+    Approach: extract per-record features, then classical ML (a 1.7M-sample
+    deep model is overkill for 166 records).
+    Features per record:
+      - cadence (steps/sec via peak detection on total force)
+      - stride time stats (mean/std/CV)
+      - stance/swing timing, symmetry index L vs R
+      - force stats: mean/max, coefficient of variation, L/R asymmetry
+      - spectral: dominant frequency, spectral entropy (0-5 Hz band)
+    Model: XGBoost or RandomForest on those features.
+    Optional deep model: 1D-CNN on fixed-window VGRF segments (only if the
+    feature model underperforms and we want a research extra).
+
+2.4 FINAL FUSION - multimodal prediction
+    Stage 1: train each modality independently with calibrated probabilities
+             (CalibratedClassifierCV).
+    Stage 2: fusion = weighted soft voting of the 3 probabilities
+             (weights tuned on validation by group). A learned stacker
+             (LogisticRegression on the 3 probabilities) as alternative.
+    Final output: PD probability per modality + fused probability +
+                  top SHAP drivers per modality (explainability).
+
+    This fusion model is a tiny meta-model; retrain it whenever any base
+    model is retrained.
+
+================================================================================
+3. TECH STACK (languages & frameworks)
+================================================================================
+
+Language:    Python 3.11 everywhere (ML, backend, scripts). One language,
+             one env - simplest for a project of this size.
+ML:          scikit-learn, XGBoost, imbalanced-learn (SMOTE only on train
+             folds), shap (explainability), joblib (model serialization).
+Backend:     FastAPI + Uvicorn (async, auto /docs, easy model serving).
+             Endpoints: POST /predict (multipart: voice csv / handwriting
+             csv / gait txt), GET /model-info, GET /health.
+             Pydantic schemas for request/response; CORS open for dev.
+Frontend:    Option A (recommended): React + Vite + Tailwind + Recharts -
+             upload cards per modality, probability gauges, SHAP charts.
+             Option B (fast demo): Streamlit multipage app.
+             Decision: React, since the gait_dashboard Streamlit app already
+             exists as the quick-demo fallback.
+Data/db:     None required for v1 (stateless predict API). Optional SQLite
+             later for prediction history.
+Testing:     pytest for loaders/features/API; smoke test that loads each
+             .joblib and predicts on one real sample per modality.
+Env:         venv + requirements.txt (no poetry needed). python-dotenv for
+             config (MODEL_DIR, FUSION_WEIGHTS).
+
+Repo layout (proposed):
+  parkinson-detector/
+    data/            raw + processed parquet caches
+    src/
+      datasets/      loaders per modality (harmonized labels)
+      features/      feature engineering (esp. gait VGRF)
+      models/        train_voice.py train_handwriting.py train_gait.py
+                     train_fusion.py  -> artifacts/*.joblib
+      api/           main.py routers schemas
+    frontend/        React app
+    tests/
+    requirements.txt
+    plan.txt
+
+================================================================================
+4. TRAINING WORKFLOW
+================================================================================
+
+Step 0  Environment
+    python -m venv .venv && pip install -r requirements.txt
+    (numpy, pandas, scikit-learn, xgboost, shap, joblib, fastapi, uvicorn)
+
+Step 1  Data ingestion (src/datasets/)
+    - load_voice()      -> df, y  (drop `name`, map status directly)
+    - load_handwriting() -> spiral + meander, y = CLASS_TYPE - 1, keep
+                           ID_PATIENT for grouping
+    - load_gait()       -> read each *_Pt*_NN.txt, attach subject group from
+                           filename, y from Pt/Co prefix; merge demographics
+    - Cache processed tables to data/processed/*.parquet.
+
+Step 2  Feature engineering (src/features/)
+    - Voice/Handwriting: scale (StandardScaler inside a Pipeline), optional
+      correlation pruning (|r| > 0.95 keep one).
+    - Gait: implement featurize_record(txt) -> ~20 features (see 2.3).
+      Validate on 3 known records (1 PD, 1 control, 1 Si/Ju) before bulk run.
+
+Step 3  Per-modality training (src/models/)
+    - Voice:        StratifiedKFold(5), XGBoost; report AUC, F1, sens/spec.
+    - Handwriting:  GroupKFold by ID_PATIENT, RandomForest + isotonic
+                    calibration; same metrics.
+    - Gait:         GroupKFold/LeaveOneGroupOut by subject, XGBoost; same.
+    - Save Pipeline (scaler + model) as models/voice.joblib,
+      handwriting.joblib, gait.joblib + a metrics.json each.
+    - Guardrails: never report accuracy from a random split for Handwriting
+      or Gait - group split only.
+
+Step 4  Fusion (train_fusion.py)
+    - Collect out-of-fold probabilities from Step 3 (no leakage into fusion).
+    - Grid-search fusion weights (or fit LogisticRegression stacker) on OOF
+      probabilities; save fusion.joblib + fusion_weights.json.
+    - Final metric table: per-modality AUC/F1 vs fused AUC/F1.
+
+Step 5  Explainability
+    - TreeSHAP per modality; store top-5 global features in metrics.json;
+      per-prediction SHAP values computed on request in the API.
+
+Step 6  Backend
+    - FastAPI app loads all 4 joblib artifacts at startup.
+    - POST /predict/pipeline accepts one or more modality inputs; missing
+      modalities simply drop out of the fusion (renormalize weights).
+    - Response: {voice: {p_pd, top_features}, handwriting: {...},
+                 gait: {...}, fused_p_pd, risk_band}.
+    - risk_band: <0.35 low, 0.35-0.65 borderline, >0.65 high.
+
+Step 7  Frontend (React)
+    - Pages: Home (3 upload cards + Predict), Results (gauges + SHAP bars +
+      risk band), About (dataset/methodology summary).
+    - Uses fetch/Axios against FastAPI; dev proxy via Vite.
+
+Step 8  Verification checklist
+    [ ] pytest passes (loaders, featurizer, API smoke test)
+    [ ] Group-split metrics reported (no leakage)
+    [ ] Each joblib loads and predicts on a real sample
+    [ ] curl POST /predict returns fused score
+    [ ] Frontend end-to-end upload -> result
+
+================================================================================
+5. MILESTONES
+================================================================================
+  M1  Loaders + harmonized labels + processed caches        (day 1)
+  M2  Three per-modality models trained + metrics.json      (day 2)
+  M3  Fusion model + SHAP                                   (day 3)
+  M4  FastAPI serving with /predict/pipeline                (day 3-4)
+  M5  React frontend end-to-end                             (day 4-5)
+  M6  Tests, README, polish                                 (day 5)
+
+================================================================================
+6. RISKS & NOTES
+================================================================================
+- Voice dataset is recording-level, not patient-level; treat results as
+  proof-of-concept, mention in README.
+- HandPD images are not in the repo; CNN on images is a stretch goal.
+- Class balance: PD-heavy in Voice (147/48) and PhysioNet; use class_weight /
+  scale_pos_weight, and report sensitivity/specificity, not just accuracy.
+- Existing gait_dashboard stays as-is (video-pose pipeline); the new gait
+  model is force-plate based and lives in the new repo.
+- Medical disclaimer in frontend: research/educational tool, not a diagnosis.
