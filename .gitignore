@@ -1,6 +1,11 @@
 Parkinson
 Parkinson.zip
 
+# Node
+node_modules/
+backend/uploads/*
+!backend/uploads/.gitkeep
+
 # Python
 __pycache__/
 *.py[cod]
@@ -23,3 +28,4 @@ ml/data/processed/
 Thumbs.db
 .idea/
 .vscode/
+backend/node_modules
